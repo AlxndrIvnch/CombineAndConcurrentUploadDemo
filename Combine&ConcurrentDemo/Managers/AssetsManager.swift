@@ -17,29 +17,23 @@ final class AssetsManager {
     
     // MARK: - Methods
     
-    func loadImages(from itemProviders: [NSItemProvider]) -> AnyPublisher<[UIImage], Error> {
-        Future { promise in
-            autoreleasepool {
-                var images = [UIImage]()
-                let dispathGroup = DispatchGroup()
-                
-                for itemProvider in itemProviders where itemProvider.canLoadObject(ofClass: UIImage.self) {
-
-                    dispathGroup.enter()
+    func loadImages(from itemProviders: [NSItemProvider]) -> AnyPublisher<[UIImage], any Error> {
+        itemProviders.enumerated().publisher
+            .filter { $1.canLoadObject(ofClass: UIImage.self) }
+            .flatMap { index, itemProvider in
+                Future { promise in
                     itemProvider.loadObject(ofClass: UIImage.self) { object, error in
-                        if let image = object as? UIImage, error == nil {
-                            images.append(image)
-                            dispathGroup.leave()
-                        } else if let error = error {
-                            promise(.failure(error))
+                        if let image = object as? UIImage {
+                            promise(.success((index, image)))
+                        } else {
+                            promise(.failure(error ?? AppError.unknown))
                         }
                     }
                 }
-
-                dispathGroup.notify(queue: .main) {
-                    promise(.success(images))
-                }
+                .eraseToAnyPublisher()
             }
-        }.eraseToAnyPublisher()
+            .collect()
+            .map { $0.sorted { $0.0 < $1.0 }.map(\.1) }
+            .eraseToAnyPublisher()
     }
 }

@@ -136,7 +136,8 @@ class MainVC: UIViewController {
                     self?.button.setTitle(title, for: .disabled)
                     self?.button.isEnabled = false
                 }
-            }.store(in: &subscriptions)
+            }
+            .store(in: &subscriptions)
     }
     
     private func bindSliderUpdates() {
@@ -167,7 +168,8 @@ class MainVC: UIViewController {
                     self.statisticView.setup(with: viewModel)
                     self.statisticView.showAnimated(in: self.stackView)
                 }
-            }.store(in: &subscriptions)
+            }
+            .store(in: &subscriptions)
     }
     
     private func bindLoaderUpdates() {
@@ -176,11 +178,14 @@ class MainVC: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] showLoader in
                 if showLoader {
+                    self?.view.isUserInteractionEnabled = false
                     self?.spinner.startAnimating()
                 } else {
+                    self?.view.isUserInteractionEnabled = true
                     self?.spinner.stopAnimating()
                 }
-            }.store(in: &subscriptions)
+            }
+            .store(in: &subscriptions)
     }
     
     private func bindTableViewUpdates() {
@@ -193,7 +198,8 @@ class MainVC: UIViewController {
                     self.tableView.deleteRows(at: changes.removed, with: .top)
                     self.tableView.reloadRows(at: changes.updated, with: .none)
                 }
-            }.store(in: &subscriptions)
+            }
+            .store(in: &subscriptions)
     }
 }
 

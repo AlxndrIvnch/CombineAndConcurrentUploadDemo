@@ -44,10 +44,8 @@ final class AlertManager {
                           title: String? = nil,
                           message: String? = nil,
                           style: UIAlertController.Style = .alert,
-                          actions: [AlertAction] = [.ok]) -> AnyPublisher<AlertAction, Never>? {
-        guard let root = viewController else { return nil }
-        
-        return Future<AlertAction, Never> { promise in
+                          actions: [AlertAction] = [.ok]) -> AnyPublisher<AlertAction, Never> {
+        return Future { promise in
             DispatchQueue.main.async {
                 
                 let alertController = UIAlertController(title: title, message: message, preferredStyle: style)
@@ -60,7 +58,7 @@ final class AlertManager {
                     alertController.addAction(.init(title: action.title, style: action.style, handler: handler))
                 }
                 
-                root.present(alertController, animated: true)
+                viewController?.present(alertController, animated: true)
             }
         }.eraseToAnyPublisher()
     }

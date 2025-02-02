@@ -17,19 +17,20 @@ final class PHPickerManager {
     
     // MARK: - Properties
     
-    private var passthroughSubject: PassthroughSubject<[PHPickerResult], Never>!
+    private var publisher: PassthroughSubject<[PHPickerResult], Never>?
     
     // MARK: - Methods
     
     func showPHPicker(with configuration: PHPickerConfiguration = .init()) -> AnyPublisher<[PHPickerResult], Never> {
         let picker = createPHPicker(configuration: configuration)
-        passthroughSubject = PassthroughSubject<[PHPickerResult], Never>()
+        let publisher = PassthroughSubject<[PHPickerResult], Never>()
+        self.publisher = publisher
         if let vc = UIViewController.topViewController {
             vc.present(picker, animated: true)
         } else {
-            passthroughSubject.send(completion: .finished)
+            publisher.send(completion: .finished)
         }
-        return passthroughSubject.eraseToAnyPublisher()
+        return publisher.eraseToAnyPublisher()
     }
     
     private func createPHPicker(configuration: PHPickerConfiguration) -> PHPickerViewController {
@@ -43,10 +44,10 @@ final class PHPickerManager {
 
 extension PHPickerManager: PHPickerViewControllerDelegate {
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-        picker.dismiss(animated: true)
         if !results.isEmpty {
-            passthroughSubject.send(results)
+            publisher?.send(results)
         }
-        passthroughSubject.send(completion: .finished)
+        publisher?.send(completion: .finished)
+        picker.dismiss(animated: true)
     }
 }

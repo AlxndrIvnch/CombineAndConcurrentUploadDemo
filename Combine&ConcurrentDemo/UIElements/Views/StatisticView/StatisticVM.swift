@@ -17,19 +17,9 @@ struct StatisticVM: Equatable {
     
     // MARK: - Init
     
-    init?(time: TimeInterval, allCount: Int, uploadedCount: Int) {
-        guard StatisticVM.isValidInput(time: time, allCount: allCount, uploadedCount: uploadedCount) else { return nil }
-        self.time = time.time.formatedString
+    init(time: TimeInterval, allCount: Int, uploadedCount: Int) {
+        self.time = time.time.formattedString
         self.allCount = String(allCount)
         self.uploadedCount = String(uploadedCount)
-    }
-    
-    // MARK: - Methods
-    
-    private static func isValidInput(time: Double, allCount: Int, uploadedCount: Int) -> Bool {
-        time.isGreaterThanOrEqualTo(0.001) &&
-        allCount.isPositive &&
-        uploadedCount.isGreaterThanOrEqualTo(.zero) &&
-        allCount.isGreaterThanOrEqualTo(uploadedCount)
     }
 }

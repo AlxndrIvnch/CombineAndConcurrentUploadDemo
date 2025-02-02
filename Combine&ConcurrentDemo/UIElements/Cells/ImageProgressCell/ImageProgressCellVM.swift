@@ -15,17 +15,27 @@ final class ImageProgressCellVM: ObservableObject {
     // MARK: - Properties
     
     let image: UIImage
+    
     @Published private(set) var progress: Float?
+    
+    var hasUploaded: Bool { snapshot?.status == .success }
+    
+    private(set) var snapshot: StorageTaskSnapshot?
     
     // MARK: - Init
     
-    init(image: UIImage) {
+    init(image: UIImage, snapshot: StorageTaskSnapshot? = nil) {
         self.image = image
+        self.snapshot = snapshot
     }
     
-    func updateProgress(from snapshot: StorageTaskSnapshot) {
-        guard let progress = snapshot.progress else { return }
-        self.progress = Float(progress.completedUnitCount) / Float(progress.totalUnitCount)
+    func update(with snapshot: StorageTaskSnapshot?) {
+        self.snapshot = snapshot
+        if let progress = snapshot?.progress {
+            self.progress = Float(progress.completedUnitCount) / Float(progress.totalUnitCount)
+        } else {
+            self.progress = nil
+        }
     }
 }
 

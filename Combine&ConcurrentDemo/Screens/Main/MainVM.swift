@@ -18,29 +18,27 @@ final class MainVM: ObservableObject {
     enum State {
         case setup
         case ready
-        case inProgress
+        case start
         case finished(error: Error? = nil)
     }
     
     // MARK: - Private(set) Properties
     
-    @Published private(set) var threadsCount: Int = 1
+    @Published private(set) var threadsCount = 1
     @Published private(set) var addButtonEnabled = true
     @Published private(set) var mainButtonState: ButtonState = .disabled(title: "Start")
     @Published private(set) var sliderEnabled = true
     @Published private(set) var showLoader = false
     @Published private(set) var statisticVisibleState: VisibilityState<StatisticVM> = .hidden
     @Published private(set) var changes: Changes = .none
-    @Published private(set) var title: String = "Upload images"
+    @Published private(set) var title = "Upload images"
     
     // MARK: - Private Properties
     
-    private let uploadingService: UploadingServiceType = UploadingService()
-    private let timerPublisher = Timer.publish(every: 0.011, on: .main, in: .common).autoconnect()
+    private let uploadingService: UploadingServiceType
+    private let timerPublisher = Timer.publish(every: 0.01, on: .main, in: .common).autoconnect()
     
     @Published private var items: [ImageProgressCellVM] = []
-    @Published private var images: [UIImage] = []
-    @Published private var snapshots: [StorageTaskSnapshot?] = []
     @Published private var state: State = .setup
     @Published private var time: Double?
     
@@ -49,7 +47,8 @@ final class MainVM: ObservableObject {
     
     // MARK: - Init/Deinit
     
-    init() {
+    init(uploadingService: UploadingServiceType = UploadingService()) {
+        self.uploadingService = uploadingService
         bind()
         DebugPrinter.printInit(for: self)
     }
@@ -62,51 +61,45 @@ final class MainVM: ObservableObject {
     
     private func bind() {
         bindState()
-        bindImages()
-        bindItemsUpdates()
-        bindChangesUpdates()
+        bindItems()
         bindTime()
     }
-    private func bindItemsUpdates() {
-        $images
-            .map { $0.map(ImageProgressCellVM.init) }
-            .sink { [weak self] in self?.items = $0 }
-            .store(in: &subscriptions)
-    }
     
-    private func bindChangesUpdates() {
+    private func bindItems() {
         $items
             .scan(([], [])) { ($0.1, $1) }
-            .map { (old, new) -> Changes in .init(new: new, old: old) }
-            .sink { [weak self] changes in self?.changes = changes }
-            .store(in: &subscriptions)
-    }
-    
-    private func bindImages() {
-        $images
+            .map { old, new in Changes(new: new, old: old) }
+            .assign(to: &$changes)
+        
+        $items
             .map(\.count)
-            .filter(\.isPositive)
-            .sink { [weak self] imagesCount in self?.title = "Upload images (\(imagesCount))" }
-            .store(in: &subscriptions)
+            .map { "Upload images" + ($0 > 0 ? " (\($0))" : "") }
+            .assign(to: &$title)
     }
     
     private func bindTime() {
         $time
-            .compactMap { [weak self] time -> StatisticVM? in
-                guard let self = self, let time = time else { return nil }
-                let uploaded = self.snapshots.filter({ $0?.status == .success })
-                return StatisticVM(time: time, allCount: self.snapshots.count, uploadedCount: uploaded.count)
+            .map { [unowned self] time in
+                guard let time else { return .hidden }
+                let statisticVM =  StatisticVM(time: time,
+                                               allCount: items.count,
+                                               uploadedCount: items.filter(\.hasUploaded).count)
+                return .shown(statisticVM)
             }
-            .sink { [weak self] in
-                guard let self = self, case .inProgress = self.state else { return }
-                self.statisticVisibleState = .shown($0)
-            }.store(in: &subscriptions)
+            .assign(to: &$statisticVisibleState)
     }
     
     private func bindState() {
         $state
             .print()
-            .sink { [weak self] in self?.updateState($0) }
+            .sink { [unowned self] in
+                switch $0 {
+                case .setup: onSetup()
+                case .ready: onReady()
+                case .start: onStart()
+                case .finished(error: let error): onFinished(with: error)
+                }
+            }
             .store(in: &subscriptions)
     }
     
@@ -116,8 +109,7 @@ final class MainVM: ObservableObject {
         let start = Date.now
         timerPublisher
             .map { $0.timeIntervalSince(start) }
-            .sink { [weak self] in self?.time = $0 }
-            .store(in: &subscriptions)
+            .assign(to: &$time)
     }
     
     private func stopTimer() {
@@ -128,47 +120,48 @@ final class MainVM: ObservableObject {
     
     private func saveOnDisk(data: Data, fileName: String =  UUID().uuidString) -> AnyPublisher<Path, any Error> {
         Future { promise in
-            DispatchQueue.global(qos: .utility).async {
-                let imagePath = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
-                do {
-                    try data.write(to: imagePath)
-                    promise(.success(imagePath))
-                } catch {
-                    promise(.failure(error))
-                }
+            let imagePath = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+            do {
+                try data.write(to: imagePath)
+                promise(.success(imagePath))
+            } catch {
+                promise(.failure(error))
             }
-        }.eraseToAnyPublisher()
+        }
+        .eraseToAnyPublisher()
     }
     
-    private func showFinishAlert(for error: Error?) -> AnyPublisher<AlertManager.AlertAction, Never>? {
-        if let error = error {
+    private func showFinishAlert(for error: Error?) -> AnyPublisher<AlertManager.AlertAction, Never> {
+        if let error {
             return AlertManager.showAlert(message: error.localizedDescription)
         } else {
-            return AlertManager.showAlert(message: "Successfully uploaded \(images.count) image(s) in \(time?.time.formatedString ?? "") seconds")
+            return AlertManager.showAlert(message: "Successfully uploaded \(items.count) image(s) in \(time?.time.formattedString ?? "") seconds")
         }
     }
     
-    private func downloadURLsAndSaveInfoToCoreData() {
-        downloadURLs()
-             .compactMap { [weak self] in self?.createModelIfPossible(with: $0) }
-             .sink { completion in
-                 if case .failure(let error) = completion {
-                     AlertManager.showAlert(message: error.localizedDescription)
-                 }
-             } receiveValue: { [weak self] in self?.saveToCoreData($0) }
+    private func saveInfoToCoreData() {
+        let snapshots = items.compactMap(\.snapshot)
+        downloadURLs(from: snapshots)
+            .subscribe(on: DispatchQueue.global(qos: .utility))
+            .compactMap { [threadsCount, time] urls in
+                let folderName = snapshots.first?.reference.parent()?.name ?? "N/A"
+                return ValidTestInfo(folderName: folderName, threadsCount: threadsCount, time: time ?? 0, images: urls)
+            }
+            .sink { completion in
+                if case .failure(let error) = completion {
+                    AlertManager.showAlert(message: error.localizedDescription)
+                }
+            } receiveValue: {
+                do {
+                    try CoreDataManager.saveTestInfo($0)
+                } catch {
+                    AlertManager.showAlert(message: error.localizedDescription)
+                }
+            }
             .store(in: &subscriptions)
     }
     
     //MARK: - State Changes Handling
-    
-    private func updateState(_ state: State) {
-        switch state {
-        case .setup: onSetup()
-        case .ready: onReady()
-        case .inProgress: onInProgress()
-        case .finished(error: let error): onFinished(with: error)
-        }
-    }
     
     private func onSetup() {
         cancelUploading()
@@ -177,8 +170,7 @@ final class MainVM: ObservableObject {
         sliderEnabled = true
         statisticVisibleState = .hidden
         stopTimer()
-        snapshots.removeAll()
-        images.removeAll()
+        items.removeAll()
     }
     
     private func onReady() {
@@ -188,29 +180,37 @@ final class MainVM: ObservableObject {
         sliderEnabled = true
         statisticVisibleState = .hidden
         stopTimer()
-        snapshots = .init(repeating: nil, count: images.count)
     }
     
-    private func onInProgress() {
-        addButtonEnabled = false
-        mainButtonState = .enabled(title: "Stop")
-        sliderEnabled = false
-        startTimer()
-        uploadImages()
+    private func onStart() {
+        createImageSources()
+            .sink { [unowned self] completion in
+                if case .failure(let error) = completion {
+                    onFinished(with: error)
+                }
+            } receiveValue: { [unowned self] in
+                addButtonEnabled = false
+                mainButtonState = .enabled(title: "Stop")
+                sliderEnabled = false
+                startTimer()
+                uploadImages(from: $0)
+            }
+            .store(in: &subscriptions)
     }
     
     private func onFinished(with error: Error? = nil) {
+        stopTimer()
         if error == nil {
-            downloadURLsAndSaveInfoToCoreData()
+            saveInfoToCoreData()
         }
+        items.forEach { $0.update(with: nil) }
         addButtonEnabled = false
         mainButtonState = .enabled(title: "Start")
         sliderEnabled = false
-        stopTimer()
         statisticVisibleState = .hidden
-        showFinishAlert(for: error)?
-            .sink { [weak self] _ in self?.state = .ready }
-            .store(in: &subscriptions)
+        showFinishAlert(for: error)
+            .map { _ in .ready }
+            .assign(to: &$state)
     }
     
     // MARK: - Images Picking
@@ -227,32 +227,34 @@ final class MainVM: ObservableObject {
     private func pickImages() {
         let configuration = createPickerConfiguration()
         PHPickerManager.shared.showPHPicker(with: configuration)
+            .handleEvents(receiveOutput: { [weak self] _ in self?.showLoader = true },
+                          receiveCompletion: { [weak self] _ in self?.showLoader = false },
+                          receiveCancel: { [weak self] in self?.showLoader = false })
             .map { $0.map(\.itemProvider) }
-            .handleEvents(receiveOutput: { [weak self] _ in self?.showLoader = true })
-            .flatMap(maxPublishers: .max(1)) { AssetsManager.shared.loadImages(from: $0) }
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] completion in
-                self?.showLoader = false
+            .flatMap { AssetsManager.shared.loadImages(from: $0) }
+            .sink { completion in
                 if case .failure(let error) = completion {
                     AlertManager.showAlert(message: error.localizedDescription)
                 }
             } receiveValue: { [weak self] images in
-                self?.images.append(contentsOf: images)
+                self?.items.append(contentsOf: images.map { ImageProgressCellVM(image: $0) })
                 self?.state = .ready
             }
             .store(in: &subscriptions)
     }
     
-    // MARK: - Networking
-    
-    private func uploadImages() {
-        images.publisher
+    private func createImageSources() -> AnyPublisher<[UploadSource], any Error> {
+        items.publisher
+            .handleEvents(receiveOutput: { [weak self] _ in self?.showLoader = true },
+                          receiveCompletion: { [weak self] _ in self?.showLoader = false },
+                          receiveCancel: { [weak self] in self?.showLoader = false })
+            .subscribe(on: DispatchQueue.global(qos: .userInitiated))
+            .map(\.image)
             .flatMap { [unowned self] image -> AnyPublisher<UploadSource, any Error> in
                 guard let data = image.pngData() else {
-                    return Fail(error: AppError.pngDataTransformationFailed)
-                        .eraseToAnyPublisher()
+                    return Fail(error: AppError.pngDataTransformationFailed).eraseToAnyPublisher()
                 }
-                if true {
+                if data.count > 3_000_000 { // if image size is more than 3 MB save it on disk
                     return saveOnDisk(data: data)
                         .map { .path($0) }
                         .eraseToAnyPublisher()
@@ -263,16 +265,21 @@ final class MainVM: ObservableObject {
                 }
             }
             .collect()
-            .flatMap { [unowned self] in
-                uploadingService.upload(from: $0, threadsCount: threadsCount)
-            }
-            .sink { [unowned self] completion in
+            .eraseToAnyPublisher()
+    }
+    
+    // MARK: - Networking
+    
+    private func uploadImages(from imageSources: [UploadSource]) {
+        Just(imageSources)
+            .flatMap { [unowned self] in uploadingService.upload(from: $0, threadsCount: threadsCount) }
+            .sink { [weak self] completion in
                 switch completion {
-                case .finished: state = .finished()
-                case .failure(let error): state = .finished(error: error)
+                case .finished: self?.state = .finished()
+                case .failure(let error): self?.state = .finished(error: error)
                 }
-            } receiveValue: { [unowned self] index, snapshot in
-                items[index].updateProgress(from: snapshot)
+            } receiveValue: { [weak self] index, snapshot in
+                self?.items[index].update(with: snapshot)
             }
             .store(in: &uploadSubscriptions)
     }
@@ -281,38 +288,22 @@ final class MainVM: ObservableObject {
         uploadSubscriptions.removeAll()
     }
     
-    private func downloadURLs() -> AnyPublisher<[URL], Error> {
+    private func downloadURLs(from snapshots: [StorageTaskSnapshot]) -> AnyPublisher<[URL], Error> {
         snapshots.publisher
-            .compactMap { $0 }
-            .flatMap(maxPublishers: .max(1)) { $0.reference.downloadURL() }
+            .subscribe(on: DispatchQueue.global(qos: .utility))
+            .flatMap { $0.reference.downloadURL() }
             .collect()
             .eraseToAnyPublisher()
     }
-    
-    // MARK: - Core Data
-    
-    private func saveToCoreData(_ validTestInfo: ValidTestInfo) {
-        do {
-            try CoreDataManager.saveTestInfo(validTestInfo)
-        } catch {
-            AlertManager.showAlert(message: error.localizedDescription)
-        }
-    }
-    
-    private func createModelIfPossible(with urls: [URL]) -> ValidTestInfo? {
-        guard let time = time,
-              let folderName = snapshots.compactMap({ $0 }).first?.reference.parent()?.name else { return nil }
-        return ValidTestInfo(folderName: folderName, threadsCount: threadsCount, time: time, images: urls)
-    }
 }
 
-// MARK: - Interanl
+// MARK: - Internal
 
 extension MainVM {
     
     // MARK: - Getters
     
-    var canEdit: Bool { state == .setup || state == .ready }
+    var canEdit: Bool { [.setup, .ready].contains(state) }
     
     var itemsCount: Int { items.count }
     
@@ -324,9 +315,9 @@ extension MainVM {
     // MARK: - Actions
     
     @discardableResult func deleteRow(at index: Int) -> Bool {
-        guard images.indices.contains(index) else { return false }
-        images.remove(at: index)
-        state = images.isEmpty ? .setup : .ready
+        guard items.indices.contains(index) else { return false }
+        items.remove(at: index)
+        state = items.isEmpty ? .setup : .ready
         return true
     }
     
@@ -334,34 +325,34 @@ extension MainVM {
     
     func bindRefreshBarButtonAction(_ publisher: AnyPublisher<Void, Never>) {
         publisher
-            .sink { [weak self] _ in self?.state = .setup }
-            .store(in: &subscriptions)
+            .map { .setup }
+            .assign(to: &$state)
     }
     
     func bindAddBarButtonAction(_ publisher: AnyPublisher<Void, Never>) {
         publisher
-            .sink { [weak self] _ in self?.pickImages() }
+            .sink { [weak self] in self?.pickImages() }
             .store(in: &subscriptions)
     }
     
     func bindMainButtonAction(_ publisher: AnyPublisher<Void, Never>) {
         publisher
-            .sink { [weak self] _ in
-                guard let self = self else { return }
-                switch self.state {
-                case .ready: self.state = .inProgress
-                case .inProgress: self.state = .ready
-                default: break
+            .compactMap { [weak self] in
+                guard let self else { return nil }
+                return switch state {
+                case .ready: .start
+                case .start: .ready
+                default: nil
                 }
-            }.store(in: &subscriptions)
+            }
+            .assign(to: &$state)
     }
     
     func bindSliderAction(_ publisher: AnyPublisher<Float, Never>) {
         publisher
             .map { Int($0) }
             .removeDuplicates()
-            .sink { [weak self] in self?.threadsCount = $0 }
-            .store(in: &subscriptions)
+            .assign(to: &$threadsCount)
     }
 }
 
@@ -369,12 +360,12 @@ extension MainVM {
 
 extension MainVM.State: Equatable {
     static func == (lhs: MainVM.State, rhs: MainVM.State) -> Bool {
-        switch (lhs, rhs) {
-        case (.setup, .setup): return true
-        case (.ready, .ready): return true
-        case (.inProgress, .inProgress): return true
-        case let (.finished(error1), .finished(error2)): return error1?.localizedDescription == error2?.localizedDescription
-        default: return false
+        return switch (lhs, rhs) {
+        case (.setup, .setup): true
+        case (.ready, .ready): true
+        case (.start, .start): true
+        case let (.finished(error1), .finished(error2)): error1?.localizedDescription == error2?.localizedDescription
+        default: false
         }
     }
 }

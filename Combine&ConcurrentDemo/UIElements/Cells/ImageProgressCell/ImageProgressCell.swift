@@ -59,7 +59,8 @@ class ImageProgressCell: UITableViewCell {
                 } else {
                     progressView.isHidden = true
                 }
-            }.store(in: &cancellables)
+            }
+            .store(in: &cancellables)
        
     }
 }

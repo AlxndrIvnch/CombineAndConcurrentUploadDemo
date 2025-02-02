@@ -22,7 +22,7 @@ struct Time {
     let seconds: Int
     let milliseconds: Int
     
-    var formatedString: String {
+    var formattedString: String {
         var format = ""
         if years.isPositive {
             format += "%01dy "
