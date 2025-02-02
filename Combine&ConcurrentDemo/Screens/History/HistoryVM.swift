@@ -75,7 +75,7 @@ extension HistoryVM {
     func getItem(for index: Int) -> TableViewCellVM? {
         guard testsInfo.indices.contains(index) else { return nil }
         let testInfo = testsInfo[index]
-        return .init(title: testInfo.foulderName,
+        return .init(title: testInfo.folderName,
                      subtitle: "Uploaded \(testInfo.imagesCount) images in \(testInfo.time.time.formatedString) using \(testInfo.threadsCount) threads")
     }
     

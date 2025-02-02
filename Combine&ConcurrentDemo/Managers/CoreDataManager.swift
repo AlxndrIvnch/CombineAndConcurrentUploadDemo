@@ -63,7 +63,7 @@ extension CoreDataManager {
     static func saveTestInfo(_ validTestInfo: ValidTestInfo) throws {
         let testInfo = TestInfo(context: context)
         testInfo.id = UUID()
-        testInfo.foulderName = validTestInfo.foulderName
+        testInfo.folderName = validTestInfo.folderName
         testInfo.threadsCount = validTestInfo.threadsCount
         testInfo.time = validTestInfo.time
         testInfo.images = validTestInfo.images

@@ -22,72 +22,36 @@ final class FirebaseManager {
     
     // MARK: - Methods
     
-    func uploadFile(with path: Path,
-                    metadata: StorageMetadata? = nil,
-                    to fouldersPath: [String] = []) -> AnyPublisher<StorageTaskSnapshot, Error> {
-        autoreleasepool {
-            let lastFoulderReference = fouldersPath.reduce(storageReference) { $0.child($1) }
-            let fileReference = lastFoulderReference.child(path.lastPathComponent)
-            
-            let uploadTask: StorageUploadTask = fileReference.putFile(from: path, metadata: metadata)
-            
-            let uploadingSubject = PassthroughSubject<StorageTaskSnapshot, Error>()
-            
-            uploadTask.observe(.progress) { snapshot in
-                uploadingSubject.send(snapshot)
-            }
-            
-            uploadTask.observe(.success) { snapshot in
-                uploadingSubject.send(snapshot)
-                uploadingSubject.send(completion: .finished)
-            }
-            
-            uploadTask.observe(.failure) { snapshot in
-                uploadingSubject.send(snapshot)
-                uploadingSubject.send(completion: .failure(snapshot.error ?? AppError.unknown))
-            }
-            
-            return uploadingSubject
-                .handleEvents(receiveCancel: {
-                    uploadTask.removeAllObservers()
-                    uploadTask.cancel()
-                })
-                .eraseToAnyPublisher()
+    func upload(from source: UploadSource,
+                metadata: StorageMetadata? = nil,
+                to storagePath: Path) -> AnyPublisher<StorageTaskSnapshot, any Error> {
+        let fileStorageReference = storagePath.pathComponents.reduce(storageReference) { $0.child($1) }
+        switch source {
+        case .data(let data):
+            return fileStorageReference.putData(data, metadata: metadata).publisher
+        case .path(let filePath):
+            return fileStorageReference.putFile(from: filePath, metadata: metadata).publisher
         }
     }
+}
+
+extension StorageUploadTask {
     
-    func upload(_ data: Data,
-                metadata: StorageMetadata? = nil,
-                to fouldersPath: [String] = [],
-                fileName: String = UUID().uuidString) -> AnyPublisher<StorageTaskSnapshot, Error> {
-        autoreleasepool {
-            let lastFoulderReference = fouldersPath.reduce(storageReference) { $0.child($1) }
-            let fileReference = lastFoulderReference.child(fileName)
-            
-            let uploadTask: StorageUploadTask = fileReference.putData(data, metadata: metadata)
-            
-            let uploadingSubject = PassthroughSubject<StorageTaskSnapshot, Error>()
-            
-            uploadTask.observe(.progress) { snapshot in
-                uploadingSubject.send(snapshot)
-            }
-            
-            uploadTask.observe(.success) { snapshot in
-                uploadingSubject.send(snapshot)
-                uploadingSubject.send(completion: .finished)
-            }
-            
-            uploadTask.observe(.failure) { snapshot in
-                uploadingSubject.send(snapshot)
-                uploadingSubject.send(completion: .failure(snapshot.error ?? AppError.unknown))
-            }
-            
-            return uploadingSubject
-                .handleEvents(receiveCancel: {
-                    uploadTask.removeAllObservers()
-                    uploadTask.cancel()
-                })
-                .eraseToAnyPublisher()
+    var publisher: AnyPublisher<StorageTaskSnapshot, any Error> {
+        let uploadingPublisher = PassthroughSubject<StorageTaskSnapshot, any Error>()
+        
+        observe(.progress) {
+            uploadingPublisher.send($0)
         }
+        observe(.success) {
+            uploadingPublisher.send($0)
+            uploadingPublisher.send(completion: .finished)
+        }
+        observe(.failure) {
+            uploadingPublisher.send($0)
+            uploadingPublisher.send(completion: .failure($0.error ?? AppError.unknown))
+        }
+        
+        return uploadingPublisher.eraseToAnyPublisher()
     }
 }

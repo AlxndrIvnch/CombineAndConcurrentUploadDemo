@@ -10,21 +10,32 @@ import CombineFirebase
 import Firebase
 import UIKit.UIImage
 
-struct ImageProgressCellVM: Hashable {
+final class ImageProgressCellVM: ObservableObject {
     
     // MARK: - Properties
     
     let image: UIImage
-    let progress: Float?
+    @Published private(set) var progress: Float?
     
     // MARK: - Init
     
-    init(image: UIImage, snapshot: StorageTaskSnapshot? = nil) {
+    init(image: UIImage) {
         self.image = image
-        if let progress = snapshot?.progress {
-            self.progress = Float(progress.completedUnitCount) / Float(progress.totalUnitCount)
-        } else {
-            self.progress = nil
-        }
+    }
+    
+    func updateProgress(from snapshot: StorageTaskSnapshot) {
+        guard let progress = snapshot.progress else { return }
+        self.progress = Float(progress.completedUnitCount) / Float(progress.totalUnitCount)
+    }
+}
+
+extension ImageProgressCellVM: Hashable {
+    
+    static func == (lhs: ImageProgressCellVM, rhs: ImageProgressCellVM) -> Bool {
+        lhs.image == rhs.image
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(image)
     }
 }

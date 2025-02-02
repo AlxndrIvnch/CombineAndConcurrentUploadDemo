@@ -232,9 +232,4 @@ extension MainVC: UITableViewDelegate {
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
         return 100
     }
-    
-    func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        guard let cell = cell as? ImageProgressCell else { return }
-        cell.viewModel = nil
-    }
 }

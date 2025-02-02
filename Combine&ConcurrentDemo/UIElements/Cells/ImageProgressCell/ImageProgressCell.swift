@@ -6,19 +6,32 @@
 //
 
 import UIKit
-import Firebase
+import Combine
 
 class ImageProgressCell: UITableViewCell {
     
     // MARK: - Properties
     
-    var viewModel: ImageProgressCellVM!
+    private let progressView = UIProgressView(progressViewStyle: .default)
+    
+    private var viewModel: ImageProgressCellVM?
+    private var cancellables: Set<AnyCancellable> = []
     
     // MARK: - Lifecycle
+    
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        accessoryView = progressView
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
     
     override func prepareForReuse() {
         super.prepareForReuse()
         viewModel = nil
+        cancellables.removeAll()
     }
     
     // MARK: - Setup
@@ -30,19 +43,23 @@ class ImageProgressCell: UITableViewCell {
     }
     
     private func setupImage() {
-        var configuration = self.defaultContentConfiguration()
-        configuration.image = viewModel.image
+        var configuration = defaultContentConfiguration()
+        configuration.image = viewModel?.image
         configuration.imageProperties.cornerRadius = 5
-        self.contentConfiguration = configuration
+        contentConfiguration = configuration
     }
     
     private func setupAccessoryView() {
-        if let progress = viewModel.progress {
-            let progressView = UIProgressView(progressViewStyle: .default)
-            progressView.progress = progress
-            self.accessoryView = progressView
-        } else {
-            self.accessoryView = nil
-        }
+        viewModel?.$progress
+            .receive(on: DispatchQueue.main)
+            .sink { [progressView] progress in
+                if let progress {
+                    progressView.progress = progress
+                    progressView.isHidden = false
+                } else {
+                    progressView.isHidden = true
+                }
+            }.store(in: &cancellables)
+       
     }
 }

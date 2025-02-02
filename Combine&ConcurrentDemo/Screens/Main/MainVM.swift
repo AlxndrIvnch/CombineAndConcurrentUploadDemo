@@ -11,7 +11,7 @@ import Firebase
 import CombineFirebase
 import Combine
 
-class MainVM: ObservableObject {
+final class MainVM: ObservableObject {
     
     // MARK: - State
     
@@ -19,7 +19,7 @@ class MainVM: ObservableObject {
         case setup
         case ready
         case inProgress
-        case finished(error: Error?)
+        case finished(error: Error? = nil)
     }
     
     // MARK: - Private(set) Properties
@@ -35,7 +35,7 @@ class MainVM: ObservableObject {
     
     // MARK: - Private Properties
     
-    private let imageUploadingService: ImageUploadingServiceType = ImageUploadingService()
+    private let uploadingService: UploadingServiceType = UploadingService()
     private let timerPublisher = Timer.publish(every: 0.011, on: .main, in: .common).autoconnect()
     
     @Published private var items: [ImageProgressCellVM] = []
@@ -45,6 +45,7 @@ class MainVM: ObservableObject {
     @Published private var time: Double?
     
     private var subscriptions = Set<AnyCancellable>()
+    private var uploadSubscriptions = Set<AnyCancellable>()
     
     // MARK: - Init/Deinit
     
@@ -67,19 +68,15 @@ class MainVM: ObservableObject {
         bindTime()
     }
     private func bindItemsUpdates() {
-        Publishers.CombineLatest($images, $snapshots)
-            .map { (images, snapshots) in
-                autoreleasepool {
-                    zip(images, snapshots).map { ImageProgressCellVM(image: $0.0, snapshot: $0.1) }
-                }
-            }
-            .removeDuplicates()
-            .sink { [weak self] items in self?.items = items }
+        $images
+            .map { $0.map(ImageProgressCellVM.init) }
+            .sink { [weak self] in self?.items = $0 }
             .store(in: &subscriptions)
     }
     
     private func bindChangesUpdates() {
-        Publishers.Zip($items, $items.dropFirst(1))
+        $items
+            .scan(([], [])) { ($0.1, $1) }
             .map { (old, new) -> Changes in .init(new: new, old: old) }
             .sink { [weak self] changes in self?.changes = changes }
             .store(in: &subscriptions)
@@ -87,8 +84,8 @@ class MainVM: ObservableObject {
     
     private func bindImages() {
         $images
-            .map { $0.count }
-            .filter { $0.isPositive }
+            .map(\.count)
+            .filter(\.isPositive)
             .sink { [weak self] imagesCount in self?.title = "Upload images (\(imagesCount))" }
             .store(in: &subscriptions)
     }
@@ -129,35 +126,25 @@ class MainVM: ObservableObject {
     
     // MARK: - Helper Methods
     
+    private func saveOnDisk(data: Data, fileName: String =  UUID().uuidString) -> AnyPublisher<Path, any Error> {
+        Future { promise in
+            DispatchQueue.global(qos: .utility).async {
+                let imagePath = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+                do {
+                    try data.write(to: imagePath)
+                    promise(.success(imagePath))
+                } catch {
+                    promise(.failure(error))
+                }
+            }
+        }.eraseToAnyPublisher()
+    }
+    
     private func showFinishAlert(for error: Error?) -> AnyPublisher<AlertManager.AlertAction, Never>? {
         if let error = error {
             return AlertManager.showAlert(message: error.localizedDescription)
         } else {
             return AlertManager.showAlert(message: "Successfully uploaded \(images.count) image(s) in \(time?.time.formatedString ?? "") seconds")
-        }
-    }
-    
-    private func saveImagesOnDisk() throws -> [Path] {
-        return try images.map { try saveOnDisk(image: $0) }
-    }
-    
-    private func saveOnDisk(image: UIImage) throws -> Path {
-        let temporaryDirectoryPath = FileManager.default.temporaryDirectory
-        
-        let imageName = UUID().uuidString + ".png"
-        let imagePath = temporaryDirectoryPath.appendingPathComponent(imageName)
-        
-        guard let data = image.pngData() else { throw AppError.pngDataTransformationFailed }
-        try data.write(to: imagePath)
-        return imagePath
-    }
-    
-    private func saveImagesOnDiskAndUpload() {
-        do {
-            let paths = try saveImagesOnDisk()
-            uploadFiles(with: paths)
-        } catch {
-            state = .finished(error: error)
         }
     }
     
@@ -184,7 +171,7 @@ class MainVM: ObservableObject {
     }
     
     private func onSetup() {
-        imageUploadingService.cancelUploading()
+        cancelUploading()
         addButtonEnabled = true
         mainButtonState = .disabled(title: "Start")
         sliderEnabled = true
@@ -195,13 +182,13 @@ class MainVM: ObservableObject {
     }
     
     private func onReady() {
-        imageUploadingService.cancelUploading()
+        cancelUploading()
         addButtonEnabled = true
         mainButtonState = .enabled(title: "Start")
         sliderEnabled = true
         statisticVisibleState = .hidden
         stopTimer()
-        snapshots = images.replacingAllWithNil()
+        snapshots = .init(repeating: nil, count: images.count)
     }
     
     private func onInProgress() {
@@ -259,31 +246,39 @@ class MainVM: ObservableObject {
     // MARK: - Networking
     
     private func uploadImages() {
-        imageUploadingService.uploadImages(images, threadsCount: threadsCount)
-            .filter { [weak self] _ in self?.state == .inProgress }
-            .sink { [weak self] completion in
-                switch completion {
-                case .finished: self?.state = .finished(error: nil)
-                case .failure(let error): self?.state = .finished(error: error)
+        images.publisher
+            .flatMap { [unowned self] image -> AnyPublisher<UploadSource, any Error> in
+                guard let data = image.pngData() else {
+                    return Fail(error: AppError.pngDataTransformationFailed)
+                        .eraseToAnyPublisher()
                 }
-            } receiveValue: { [weak self] snapshots in
-                self?.snapshots = snapshots
-                print(snapshots.map({ $0?.progress?.localizedDescription }))
-            }.store(in: &subscriptions)
+                if true {
+                    return saveOnDisk(data: data)
+                        .map { .path($0) }
+                        .eraseToAnyPublisher()
+                } else {
+                    return Just(.data(data))
+                        .setFailureType(to: Error.self)
+                        .eraseToAnyPublisher()
+                }
+            }
+            .collect()
+            .flatMap { [unowned self] in
+                uploadingService.upload(from: $0, threadsCount: threadsCount)
+            }
+            .sink { [unowned self] completion in
+                switch completion {
+                case .finished: state = .finished()
+                case .failure(let error): state = .finished(error: error)
+                }
+            } receiveValue: { [unowned self] index, snapshot in
+                items[index].updateProgress(from: snapshot)
+            }
+            .store(in: &uploadSubscriptions)
     }
     
-    private func uploadFiles(with paths: [Path]) {
-        imageUploadingService.uploadFiles(from: paths, threadsCount: self.threadsCount)
-            .filter { [weak self] _ in self?.state == .inProgress }
-            .sink { [weak self] completion in
-                switch completion {
-                case .finished: self?.state = .finished(error: nil)
-                case .failure(let error): self?.state = .finished(error: error)
-                }
-            } receiveValue: { [weak self] snapshots in
-                self?.snapshots = snapshots
-                print(snapshots.map({ $0?.progress?.localizedDescription }))
-            }.store(in: &subscriptions)
+    private func cancelUploading() {
+        uploadSubscriptions.removeAll()
     }
     
     private func downloadURLs() -> AnyPublisher<[URL], Error> {
@@ -306,8 +301,8 @@ class MainVM: ObservableObject {
     
     private func createModelIfPossible(with urls: [URL]) -> ValidTestInfo? {
         guard let time = time,
-              let foulderName = snapshots.compactMap({ $0 }).first?.reference.parent()?.name else { return nil }
-        return ValidTestInfo(foulderName: foulderName, threadsCount: threadsCount, time: time, images: urls)
+              let folderName = snapshots.compactMap({ $0 }).first?.reference.parent()?.name else { return nil }
+        return ValidTestInfo(folderName: folderName, threadsCount: threadsCount, time: time, images: urls)
     }
 }
 

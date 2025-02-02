@@ -14,7 +14,7 @@ extension TestInfo : Identifiable {
 }
 
 extension TestInfo {
-    @NSManaged public var foulderName: String
+    @NSManaged public var folderName: String
     @NSManaged public var threadsCount: Int16
     @NSManaged public var time: Double
     @NSManaged public var images: [URL]
