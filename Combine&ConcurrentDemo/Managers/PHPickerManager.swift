@@ -44,10 +44,11 @@ final class PHPickerManager {
 
 extension PHPickerManager: PHPickerViewControllerDelegate {
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-        if !results.isEmpty {
-            publisher?.send(results)
+        picker.dismiss(animated: true) { [weak self] in
+            if !results.isEmpty {
+                self?.publisher?.send(results)
+            }
+            self?.publisher?.send(completion: .finished)
         }
-        publisher?.send(completion: .finished)
-        picker.dismiss(animated: true)
     }
 }

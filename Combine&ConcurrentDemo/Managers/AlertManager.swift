@@ -31,25 +31,24 @@ final class AlertManager {
     // MARK: - Methods
     
     @discardableResult static func showAlertOnTopVC<T: UIViewController>(of type: T.Type,
-                                                      title: String? = nil,
-                                                      message: String? = nil,
-                                                      style: UIAlertController.Style = .alert,
-                                                      actions: [AlertAction] = [.ok]) -> AnyPublisher<AlertAction, Never>? {
+                                                                         title: String? = nil,
+                                                                         message: String? = nil,
+                                                                         style: UIAlertController.Style = .alert,
+                                                                         actions: [AlertAction] = [.ok]) -> AnyPublisher<AlertAction, Never>? {
         let topViewController = UIViewController.topViewController
         guard topViewController is T else { return nil }
         return showAlert(on: topViewController, title: title, message: message, style: style, actions: actions)
     }
     
-    @discardableResult static func showAlert(on viewController: UIViewController? = .topViewController,
-                          title: String? = nil,
-                          message: String? = nil,
-                          style: UIAlertController.Style = .alert,
-                          actions: [AlertAction] = [.ok]) -> AnyPublisher<AlertAction, Never> {
+    @discardableResult static func showAlert(on viewController: UIViewController? = nil,
+                                             title: String? = nil,
+                                             message: String? = nil,
+                                             style: UIAlertController.Style = .alert,
+                                             actions: [AlertAction] = [.ok]) -> AnyPublisher<AlertAction, Never> {
         return Future { promise in
             DispatchQueue.main.async {
-                
                 let alertController = UIAlertController(title: title, message: message, preferredStyle: style)
-     
+                
                 actions.forEach { action in
                     let handler: SimpleClosure<UIAlertAction>? = { _ in
                         promise(.success(action))
@@ -58,8 +57,9 @@ final class AlertManager {
                     alertController.addAction(.init(title: action.title, style: action.style, handler: handler))
                 }
                 
-                viewController?.present(alertController, animated: true)
+                (viewController ?? .topViewController)?.present(alertController, animated: true)
             }
-        }.eraseToAnyPublisher()
+        }
+        .eraseToAnyPublisher()
     }
 }

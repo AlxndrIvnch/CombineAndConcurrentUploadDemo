@@ -9,12 +9,16 @@ import Combine
 import CombineFirebase
 import Firebase
 import UIKit.UIImage
+import Photos
 
 final class ImageProgressCellVM: ObservableObject {
     
     // MARK: - Properties
     
-    let image: UIImage
+    let asset: PHAsset
+    
+    private(set) lazy var image = AssetsManager.shared.loadImage(for: asset,
+                                                                 parameters: imageRequestParameters)
     
     @Published private(set) var progress: Float?
     
@@ -22,10 +26,20 @@ final class ImageProgressCellVM: ObservableObject {
     
     private(set) var snapshot: StorageTaskSnapshot?
     
+    private let imageRequestParameters: AssetsManager.PHImageRequestParameters = {
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = true
+        options.resizeMode = .fast
+        return .init(targetSize: .init(width: 300, height: 300),
+                     contentMode: .aspectFit,
+                     options: options)
+    }()
+    
     // MARK: - Init
     
-    init(image: UIImage, snapshot: StorageTaskSnapshot? = nil) {
-        self.image = image
+    init(asset: PHAsset, snapshot: StorageTaskSnapshot? = nil) {
+        self.asset = asset
         self.snapshot = snapshot
     }
     
@@ -37,15 +51,23 @@ final class ImageProgressCellVM: ObservableObject {
             self.progress = nil
         }
     }
+    
+    func startCachingImage() {
+        AssetsManager.shared.startCachingImages(for: asset, parameters: imageRequestParameters)
+    }
+    
+    func stopCachingImage() {
+        AssetsManager.shared.stopCachingImages(for: asset, parameters: imageRequestParameters)
+    }
 }
 
 extension ImageProgressCellVM: Hashable {
     
     static func == (lhs: ImageProgressCellVM, rhs: ImageProgressCellVM) -> Bool {
-        lhs.image == rhs.image
+        lhs.asset == rhs.asset
     }
     
     func hash(into hasher: inout Hasher) {
-        hasher.combine(image)
+        hasher.combine(asset)
     }
 }

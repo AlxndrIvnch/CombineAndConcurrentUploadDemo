@@ -28,6 +28,7 @@ final class UploadingService: UploadingServiceType {
     func upload(from sources: [UploadSource], threadsCount: Int) -> AnyPublisher<(Int, StorageTaskSnapshot), any Error> {
         let remotePath = Path(filePath: "\(Date.now)").appending(component: "\(UUID().uuidString).png")
         return sources.enumerated().publisher
+            .subscribe(on: DispatchQueue.global())
             .flatMap(maxPublishers: .max(threadsCount)) { index, source in
                 FirebaseManager.shared.upload(from: source, to: remotePath)
                     .map { (index, $0) }

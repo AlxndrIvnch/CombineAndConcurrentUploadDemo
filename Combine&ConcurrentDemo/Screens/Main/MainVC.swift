@@ -24,7 +24,7 @@ class MainVC: UIViewController {
     
     // MARK: - Properties
     
-    private let spinner = UIActivityIndicatorView(style: .medium)
+    private let spinner = UIActivityIndicatorView(style: .large)
     private var subscriptions = Set<AnyCancellable>()
     
     var viewModel: MainVM!
@@ -237,5 +237,17 @@ extension MainVC: UITableViewDelegate {
     
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
         return 100
+    }
+}
+
+//MARK: - UITableViewDataSourcePrefetching
+
+extension MainVC: UITableViewDataSourcePrefetching {
+    func tableView(_ tableView: UITableView, prefetchRowsAt indexPaths: [IndexPath]) {
+        viewModel.prefetchRows(at: indexPaths)
+    }
+    
+    func tableView(_ tableView: UITableView, cancelPrefetchingForRowsAt indexPaths: [IndexPath]) {
+        viewModel.cancelPrefetchingRows(at: indexPaths)
     }
 }

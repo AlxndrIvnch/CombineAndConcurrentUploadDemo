@@ -36,7 +36,7 @@ final class MainVM: ObservableObject {
     // MARK: - Private Properties
     
     private let uploadingService: UploadingServiceType
-    private let timerPublisher = Timer.publish(every: 0.01, on: .main, in: .common).autoconnect()
+    private let timerPublisher = Timer.publish(every: 0.011, on: .main, in: .common).autoconnect()
     
     @Published private var items: [ImageProgressCellVM] = []
     @Published private var state: State = .setup
@@ -66,8 +66,7 @@ final class MainVM: ObservableObject {
     }
     
     private func bindItems() {
-        $items
-            .scan(([], [])) { ($0.1, $1) }
+        Publishers.Zip($items, $items.dropFirst(1))
             .map { old, new in Changes(new: new, old: old) }
             .assign(to: &$changes)
         
@@ -91,7 +90,6 @@ final class MainVM: ObservableObject {
     
     private func bindState() {
         $state
-            .print()
             .sink { [unowned self] in
                 switch $0 {
                 case .setup: onSetup()
@@ -128,6 +126,7 @@ final class MainVM: ObservableObject {
                 promise(.failure(error))
             }
         }
+        .subscribe(on: DispatchQueue.global())
         .eraseToAnyPublisher()
     }
     
@@ -142,10 +141,12 @@ final class MainVM: ObservableObject {
     private func saveInfoToCoreData() {
         let snapshots = items.compactMap(\.snapshot)
         downloadURLs(from: snapshots)
-            .subscribe(on: DispatchQueue.global(qos: .utility))
             .compactMap { [threadsCount, time] urls in
                 let folderName = snapshots.first?.reference.parent()?.name ?? "N/A"
-                return ValidTestInfo(folderName: folderName, threadsCount: threadsCount, time: time ?? 0, images: urls)
+                return ValidTestInfo(folderName: folderName,
+                                     threadsCount: threadsCount,
+                                     time: time ?? 0,
+                                     images: urls)
             }
             .sink { completion in
                 if case .failure(let error) = completion {
@@ -174,6 +175,7 @@ final class MainVM: ObservableObject {
     }
     
     private func onReady() {
+        items.forEach { $0.update(with: nil) }
         cancelUploading()
         addButtonEnabled = true
         mainButtonState = .enabled(title: "Start")
@@ -203,7 +205,6 @@ final class MainVM: ObservableObject {
         if error == nil {
             saveInfoToCoreData()
         }
-        items.forEach { $0.update(with: nil) }
         addButtonEnabled = false
         mainButtonState = .enabled(title: "Start")
         sliderEnabled = false
@@ -215,29 +216,29 @@ final class MainVM: ObservableObject {
     
     // MARK: - Images Picking
     
-    private func createPickerConfiguration() -> PHPickerConfiguration {
-        var configuration = PHPickerConfiguration()
+    private lazy var pickerConfiguration: PHPickerConfiguration = {
+        let photoLibrary = PHPhotoLibrary.shared()
+        var configuration = PHPickerConfiguration(photoLibrary: photoLibrary)
         configuration.filter = .images
         configuration.selection = .default
         configuration.preferredAssetRepresentationMode = .current
         configuration.selectionLimit = 0
         return configuration
-    }
+    }()
     
     private func pickImages() {
-        let configuration = createPickerConfiguration()
-        PHPickerManager.shared.showPHPicker(with: configuration)
-            .handleEvents(receiveOutput: { [weak self] _ in self?.showLoader = true },
-                          receiveCompletion: { [weak self] _ in self?.showLoader = false },
-                          receiveCancel: { [weak self] in self?.showLoader = false })
-            .map { $0.map(\.itemProvider) }
-            .flatMap { AssetsManager.shared.loadImages(from: $0) }
+        PHPickerManager.shared.showPHPicker(with: pickerConfiguration)
+            .receive(on: DispatchQueue.global(qos: .userInitiated))
+            .handleEvents(receiveOutput: { [weak self] _ in self?.showLoader = true })
+            .map { $0.compactMap(\.assetIdentifier) }
+            .flatMap { AssetsManager.shared.fetchAssets(for: $0) }
+            .handleEvents(receiveCompletion: { [weak self] _ in self?.showLoader = false })
             .sink { completion in
                 if case .failure(let error) = completion {
                     AlertManager.showAlert(message: error.localizedDescription)
                 }
-            } receiveValue: { [weak self] images in
-                self?.items.append(contentsOf: images.map { ImageProgressCellVM(image: $0) })
+            } receiveValue: { [weak self] assets in
+                self?.items.append(contentsOf: assets.map { ImageProgressCellVM(asset: $0) })
                 self?.state = .ready
             }
             .store(in: &subscriptions)
@@ -245,26 +246,34 @@ final class MainVM: ObservableObject {
     
     private func createImageSources() -> AnyPublisher<[UploadSource], any Error> {
         items.publisher
-            .handleEvents(receiveOutput: { [weak self] _ in self?.showLoader = true },
-                          receiveCompletion: { [weak self] _ in self?.showLoader = false },
-                          receiveCancel: { [weak self] in self?.showLoader = false })
             .subscribe(on: DispatchQueue.global(qos: .userInitiated))
-            .map(\.image)
+            .handleEvents(receiveOutput: { [weak self] _ in self?.showLoader = true })
+            .map(\.asset)
+            .flatMap {
+                let options = PHImageRequestOptions()
+                options.deliveryMode = .highQualityFormat
+                options.isNetworkAccessAllowed = true
+                options.resizeMode = .none
+                return AssetsManager.shared.loadImage(for: $0, parameters: .init(options: options))
+            }
             .flatMap { [unowned self] image -> AnyPublisher<UploadSource, any Error> in
-                guard let data = image.pngData() else {
-                    return Fail(error: AppError.pngDataTransformationFailed).eraseToAnyPublisher()
-                }
-                if data.count > 3_000_000 { // if image size is more than 3 MB save it on disk
-                    return saveOnDisk(data: data)
-                        .map { .path($0) }
-                        .eraseToAnyPublisher()
-                } else {
-                    return Just(.data(data))
-                        .setFailureType(to: Error.self)
-                        .eraseToAnyPublisher()
+                autoreleasepool {
+                    guard let data = image?.pngData() else {
+                        return Fail(error: AppError.pngDataTransformationFailed).eraseToAnyPublisher()
+                    }
+                    if data.count > 3_000_000 { // if image size is more than 3 MB save it on disk
+                        return saveOnDisk(data: data)
+                            .map { .path($0) }
+                            .eraseToAnyPublisher()
+                    } else {
+                        return Just(.data(data))
+                            .setFailureType(to: Error.self)
+                            .eraseToAnyPublisher()
+                    }
                 }
             }
             .collect()
+            .handleEvents(receiveCompletion: { [weak self] _ in self?.showLoader = false })
             .eraseToAnyPublisher()
     }
     
@@ -319,6 +328,20 @@ extension MainVM {
         items.remove(at: index)
         state = items.isEmpty ? .setup : .ready
         return true
+    }
+    
+    func prefetchRows(at indexPaths: [IndexPath]) {
+        indexPaths.map(\.row).forEach {
+            guard items.indices.contains($0) else { return }
+            items[$0].startCachingImage()
+        }
+    }
+    
+    func cancelPrefetchingRows(at indexPaths: [IndexPath]) {
+        indexPaths.map(\.row).forEach {
+            guard items.indices.contains($0) else { return }
+            items[$0].stopCachingImage()
+        }
     }
     
     // MARK: - Binding
